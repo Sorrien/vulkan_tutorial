@@ -48,6 +48,7 @@ pub struct VulkanApplication {
     instance: Instance,
     debug_utils: ash::extensions::ext::DebugUtils,
     debug_messenger: vk::DebugUtilsMessengerEXT,
+    physical_device: PhysicalDevice,
     device: Device,
     surface: SurfaceKHR,
     surface_loader: Surface,
@@ -69,6 +70,9 @@ pub struct VulkanApplication {
     render_finished_semaphores: Vec<vk::Semaphore>,
     in_flight_fences: Vec<vk::Fence>,
     current_frame: usize,
+    queue_family_indices: QueueFamilyIndices,
+    swapchain_support: SwapchainSupportDetails,
+    framebuffer_resized: bool,
 }
 
 impl VulkanApplication {
@@ -158,6 +162,7 @@ impl VulkanApplication {
             instance,
             debug_utils,
             debug_messenger,
+            physical_device,
             device: logical_device,
             surface,
             surface_loader,
@@ -179,6 +184,9 @@ impl VulkanApplication {
             render_finished_semaphores,
             in_flight_fences,
             current_frame: 0,
+            queue_family_indices,
+            swapchain_support,
+            framebuffer_resized: false,
         }
     }
 
@@ -204,7 +212,17 @@ impl VulkanApplication {
                 event: WindowEvent::RedrawRequested,
                 window_id: _,
             } => {
-                self.draw_frame();
+                let size = self.window.inner_size();
+                //don't attempt to draw a frame in window size is 0zs
+                if size.height > 0 && size.width > 0 {
+                    self.draw_frame();
+                }
+            }
+            Event::WindowEvent {
+                window_id: _,
+                event: WindowEvent::Resized(_new_size),
+            } => {
+                self.framebuffer_resized = true;
             }
             _ => (),
         })
@@ -220,21 +238,42 @@ impl VulkanApplication {
             )
         }
         .expect("failed to wait for in flight fence!");
+
+        if self.framebuffer_resized {
+            self.framebuffer_resized = false;
+            self.recreate_swapchain();
+            return;
+        }
+
+        let (image_index, _was_next_image_acquired) = unsafe {
+            let result = self.swapchain_loader.acquire_next_image(
+                self.swapchain,
+                u64::MAX,
+                self.image_available_semaphores[self.current_frame],
+                vk::Fence::null(),
+            );
+
+            match result {
+                Ok((image_index, was_next_image_acquired)) => {
+                    (image_index, was_next_image_acquired)
+                }
+                Err(vk_result) => match vk_result {
+                    vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR => {
+                        self.framebuffer_resized = false;
+                        self.recreate_swapchain();
+                        return;
+                    }
+                    _ => panic!("failed to acquire next swapchain image!"),
+                },
+            }
+        };
+
+        //only reset the fence if we are submitting work
         unsafe {
             self.device
                 .reset_fences(&[self.in_flight_fences[self.current_frame]])
         }
         .expect("failed to reset in flight fence!");
-
-        let (image_index, _) = unsafe {
-            self.swapchain_loader.acquire_next_image(
-                self.swapchain,
-                u64::MAX,
-                self.image_available_semaphores[self.current_frame],
-                vk::Fence::null(),
-            )
-        }
-        .expect("failed to acquire next swapchain image!");
 
         let command_buffer = self.command_buffers[self.current_frame];
         unsafe {
@@ -276,13 +315,68 @@ impl VulkanApplication {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
 
-        unsafe {
+        let present_result = unsafe {
             self.swapchain_loader
                 .queue_present(self.present_queue, &present_info)
+        };
+        match present_result {
+            Ok(_) => (),
+            Err(vk_result) => match vk_result {
+                vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR => {
+                    self.framebuffer_resized = false;
+                    self.recreate_swapchain();
+                    return;
+                }
+                _ => panic!("failed to present swap chain image!"),
+            },
         }
-        .expect("failed to queue present!");
 
         self.current_frame = (self.current_frame + 1) % MAXFRAMESINFLIGHT;
+    }
+
+    fn recreate_swapchain(&mut self) {
+        //may want to look into using the old swapchain to create a new one instead of just waiting for idle then destroying the current one.
+        unsafe { self.device.device_wait_idle() }.expect("failed to wait for device idle!");
+
+        self.cleanup_swapchain();
+
+        let swapchain_details = SwapchainSupportDetails::new(
+            &self.physical_device,
+            &self.surface_loader,
+            &self.surface,
+        );
+
+        self.swapchain_support = swapchain_details;
+
+        let window_size = self.window.inner_size();
+
+        let (swapchain, swapchain_loader, format, extent) = Self::create_swapchain(
+            &self.instance,
+            &self.device,
+            &self.surface,
+            window_size.width,
+            window_size.height,
+            &self.queue_family_indices,
+            &self.swapchain_support,
+        )
+        .expect("failed to recreate swapchain!");
+        self.swapchain = swapchain;
+        self.swapchain_loader = swapchain_loader;
+        self.format = format;
+        self.extent = extent;
+
+        self.swapchain_images = unsafe { self.swapchain_loader.get_swapchain_images(swapchain) }
+            .expect("failed to get swapchain images!");
+
+        self.swapchain_image_views =
+            Self::create_swapchain_image_views(&self.device, &self.swapchain_images, format);
+
+        self.swapchain_framebuffers = Self::create_frame_buffers(
+            &self.swapchain_image_views,
+            &self.render_pass,
+            &self.extent,
+            &self.device,
+        );
     }
 
     fn create_instance(window: &Window, entry: &Entry) -> Instance {
@@ -984,6 +1078,19 @@ impl VulkanApplication {
             in_flight_fences,
         )
     }
+
+    fn cleanup_swapchain(&mut self) {
+        unsafe {
+            self.swapchain_framebuffers
+                .iter()
+                .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
+            self.swapchain_image_views
+                .iter()
+                .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
+        }
+    }
 }
 
 impl Drop for VulkanApplication {
@@ -997,18 +1104,19 @@ impl Drop for VulkanApplication {
                 self.device.destroy_fence(self.in_flight_fences[i], None);
             }
             self.device.destroy_command_pool(self.command_pool, None);
-            self.swapchain_framebuffers
-                .iter()
-                .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
+            /*             self.swapchain_framebuffers
+            .iter()
+            .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None)); */
+            self.cleanup_swapchain();
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_render_pass(self.render_pass, None);
-            self.swapchain_image_views
+            /*             self.swapchain_image_views
                 .iter()
                 .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
             self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
+                .destroy_swapchain(self.swapchain, None); */
             self.device.destroy_device(None);
             #[cfg(feature = "validation_layers")]
             self.debug_utils
