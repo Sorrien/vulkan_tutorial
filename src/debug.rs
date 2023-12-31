@@ -55,8 +55,8 @@ fn create_debug_callback(debug_utils_loader: &DebugUtils) -> ash::vk::DebugUtils
     }
 }
 
-pub fn create_debug_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
-    let x = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+pub fn create_debug_info() -> vk::DebugUtilsMessengerCreateInfoEXT<'static> {
+    let x = vk::DebugUtilsMessengerCreateInfoEXT::default()
         .message_severity(
             vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
                 | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
@@ -67,7 +67,6 @@ pub fn create_debug_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
                 | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
                 | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
         )
-        .pfn_user_callback(Some(vulkan_debug_callback))
-        .build();
+        .pfn_user_callback(Some(vulkan_debug_callback));
     x
 }

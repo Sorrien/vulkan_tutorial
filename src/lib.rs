@@ -11,7 +11,6 @@ use ash::{
         khr::{Surface, Swapchain},
     },
     util::read_spv,
-    util::*,
     vk::{
         self, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, BlendFactor, BlendOp,
         ColorComponentFlags, ColorSpaceKHR, CommandPoolCreateFlags, ComponentMapping,
@@ -74,6 +73,7 @@ impl VulkanApplication {
         let entry = ash::Entry::linked();
         let window_size = window.inner_size();
         let instance = Self::create_instance(&window, &entry);
+
         let (debug_utils, debug_messenger) = crate::debug::debug_utils(&entry, &instance);
 
         let surface_loader = Surface::new(&entry, &instance);
@@ -121,7 +121,13 @@ impl VulkanApplication {
         let swapchain_image_views =
             Self::create_swapchain_image_views(&logical_device, &swapchain_images, format);
 
-        let graphics_subpass = Self::create_graphics_sub_pass();
+        let color_attachment_refs = vec![vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        }];
+        let graphics_subpass =
+            Self::create_sub_pass(&color_attachment_refs, PipelineBindPoint::GRAPHICS);
+
         let render_pass =
             Self::create_render_pass(&logical_device, &format, vec![graphics_subpass])
                 .expect("failed to create render pass!");
@@ -234,12 +240,11 @@ impl VulkanApplication {
         let wait_mask = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let command_submit_signal_semaphores = [self.render_finished_semaphore];
 
-        let submit_info = vk::SubmitInfo::builder()
+        let submit_info = vk::SubmitInfo::default()
             .wait_semaphores(&command_submit_wait_semaphores)
             .wait_dst_stage_mask(&wait_mask)
             .command_buffers(&command_buffers)
-            .signal_semaphores(&command_submit_signal_semaphores)
-            .build();
+            .signal_semaphores(&command_submit_signal_semaphores);
 
         unsafe {
             self.device
@@ -251,11 +256,10 @@ impl VulkanApplication {
         let present_wait_semaphores = [self.render_finished_semaphore];
         let image_indices = [image_index];
 
-        let present_info = vk::PresentInfoKHR::builder()
+        let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(&present_wait_semaphores)
             .swapchains(&swapchains)
-            .image_indices(&image_indices)
-            .build();
+            .image_indices(&image_indices);
 
         //present_info.p_results = ptr::null_mut();
 
@@ -288,12 +292,11 @@ impl VulkanApplication {
 
         required_extension_names.append(&mut window_extension_names);
         #[cfg(feature = "validation_layers")]
-        required_extension_names.push(DebugUtils::name().as_ptr());
+        required_extension_names.push(DebugUtils::NAME.as_ptr());
         #[cfg(feature = "validation_layers")]
         println!("Validation Layers enabled!");
 
-        let extension_properties = entry
-            .enumerate_instance_extension_properties(None)
+        let extension_properties = unsafe { entry.enumerate_instance_extension_properties(None) }
             .expect("failed to enumerate instance extension props!");
 
         println!("Enabled extensions:");
@@ -313,8 +316,9 @@ impl VulkanApplication {
                 panic!("required extensions were not available!");
             }
         }
+        println!("");
 
-        let appinfo = vk::ApplicationInfo::builder()
+        let appinfo = vk::ApplicationInfo::default()
             .application_name(app_name)
             .application_version(vk::make_api_version(0, 1, 0, 0))
             .engine_name(engine_name)
@@ -332,17 +336,17 @@ impl VulkanApplication {
             .map(|raw_name| raw_name.as_ptr())
             .collect();
 
-        let mut create_info = vk::InstanceCreateInfo::builder()
+        let mut create_info = vk::InstanceCreateInfo::default()
             .application_info(&appinfo)
             .enabled_extension_names(&required_extension_names);
+
+        let debug_info = debug::create_debug_info();
         if enable_validation_layers {
             Self::check_validation_layer_support(&entry, &layers_names_raw);
-
             create_info = create_info.enabled_layer_names(&layers_names_raw);
 
-            create_info.p_next = &debug::create_debug_info()
-                as *const vk::DebugUtilsMessengerCreateInfoEXT
-                as *const c_void;
+            create_info.p_next =
+                &debug_info as *const vk::DebugUtilsMessengerCreateInfoEXT as *const c_void;
         }
 
         let instance: Instance = unsafe {
@@ -355,8 +359,7 @@ impl VulkanApplication {
     }
 
     fn check_validation_layer_support(entry: &Entry, layers_names_raw: &Vec<*const c_char>) {
-        let available_layers = entry
-            .enumerate_instance_layer_properties()
+        let available_layers = unsafe { entry.enumerate_instance_layer_properties() }
             .expect("failed to get available layers!");
 
         for name in layers_names_raw.iter() {
@@ -489,27 +492,23 @@ impl VulkanApplication {
         queue_family_indices: &QueueFamilyIndices,
     ) -> Result<ash::Device, vk::Result> {
         let queue_create_infos = [queue_family_indices.graphics_family.unwrap() as u32].map(|i| {
-            DeviceQueueCreateInfo::builder()
+            DeviceQueueCreateInfo::default()
                 .queue_family_index(i)
                 .queue_priorities(&[1.])
-                .build()
         });
 
-        let device_features = PhysicalDeviceFeatures::builder()
-            .geometry_shader(true)
-            .build();
+        let device_features = PhysicalDeviceFeatures::default().geometry_shader(true);
 
         //may want to add check against available extensions later but the availability of present implies swap chain extension availability.
         let device_extension_names_raw = [
-            Swapchain::name().as_ptr(),
+            Swapchain::NAME.as_ptr(),
             //#[cfg(any(target_os = "macos", target_os = "ios"))]
             //KhrPortabilitySubsetFn::NAME.as_ptr(),
         ];
-        let device_create_info = DeviceCreateInfo::builder()
+        let device_create_info = DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)
             .enabled_features(&device_features)
-            .enabled_extension_names(&device_extension_names_raw)
-            .build(); //device specific layers are outdated but keep in mind if an issue crops up on older hardware
+            .enabled_extension_names(&device_extension_names_raw); //device specific layers are outdated but keep in mind if an issue crops up on older hardware
 
         unsafe { instance.create_device(*device, &device_create_info, None) }
     }
@@ -554,7 +553,7 @@ impl VulkanApplication {
             };
 
         let swapchain_loader = Swapchain::new(instance, logical_device);
-        let swapchain_create_info = SwapchainCreateInfoKHR::builder()
+        let swapchain_create_info = SwapchainCreateInfoKHR::default()
             .surface(*surface)
             .min_image_count(image_count)
             .image_format(surface_format.format)
@@ -628,12 +627,12 @@ impl VulkanApplication {
         swapchain_images: &Vec<vk::Image>,
         swapchain_image_format: Format,
     ) -> Vec<ImageView> {
-        let component_mapping = ComponentMapping::builder()
+        let component_mapping = ComponentMapping::default()
             .r(ComponentSwizzle::IDENTITY)
             .g(ComponentSwizzle::IDENTITY)
             .b(ComponentSwizzle::IDENTITY)
             .a(ComponentSwizzle::IDENTITY);
-        let subresource_range = ImageSubresourceRange::builder()
+        let subresource_range = ImageSubresourceRange::default()
             .aspect_mask(ImageAspectFlags::COLOR)
             .base_mip_level(0)
             .level_count(1)
@@ -642,12 +641,12 @@ impl VulkanApplication {
         swapchain_images
             .iter()
             .map(|image| {
-                *ImageViewCreateInfo::builder()
+                ImageViewCreateInfo::default()
                     .image(*image)
                     .view_type(ImageViewType::TYPE_2D)
                     .format(swapchain_image_format)
-                    .components(*component_mapping)
-                    .subresource_range(*subresource_range)
+                    .components(component_mapping)
+                    .subresource_range(subresource_range)
             })
             .map(|image_view_create_info| {
                 unsafe { device.create_image_view(&image_view_create_info, None) }
@@ -662,7 +661,7 @@ impl VulkanApplication {
     {
         let mut spv_file = File::open(path).unwrap();
         let shader_code = read_spv(&mut spv_file).expect("Failed to read vertex shader spv file");
-        let vertex_shader_info = vk::ShaderModuleCreateInfo::builder().code(&shader_code);
+        let vertex_shader_info = vk::ShaderModuleCreateInfo::default().code(&shader_code);
         let shader_module = unsafe {
             device
                 .create_shader_module(&vertex_shader_info, None)
@@ -681,50 +680,44 @@ impl VulkanApplication {
             Self::create_shader_module("shaders/triangle/test.frag.spv", device);
         let shader_entry_name = unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") };
 
-        let vertex_shader_stage_info = PipelineShaderStageCreateInfo::builder()
+        let vertex_shader_stage_info = PipelineShaderStageCreateInfo::default()
             .stage(ShaderStageFlags::VERTEX)
             .module(vertex_shader_module)
-            .name(shader_entry_name)
-            .build();
+            .name(shader_entry_name);
 
-        let fragment_shader_stage_info = PipelineShaderStageCreateInfo::builder()
+        let fragment_shader_stage_info = PipelineShaderStageCreateInfo::default()
             .stage(ShaderStageFlags::FRAGMENT)
             .module(fragment_shader_module)
-            .name(shader_entry_name)
-            .build();
+            .name(shader_entry_name);
 
         let shader_stages = vec![vertex_shader_stage_info, fragment_shader_stage_info];
 
-        let dynamic_state = PipelineDynamicStateCreateInfo::builder()
-            .dynamic_states(&[DynamicState::VIEWPORT, DynamicState::SCISSOR])
-            .build();
+        let dynamic_state = PipelineDynamicStateCreateInfo::default()
+            .dynamic_states(&[DynamicState::VIEWPORT, DynamicState::SCISSOR]);
 
-        let vertex_input_info = PipelineVertexInputStateCreateInfo::builder().build();
+        let vertex_input_info = PipelineVertexInputStateCreateInfo::default();
 
-        let input_assembly = PipelineInputAssemblyStateCreateInfo::builder()
+        let input_assembly = PipelineInputAssemblyStateCreateInfo::default()
             .topology(PrimitiveTopology::TRIANGLE_LIST);
 
-        let viewport_state = PipelineViewportStateCreateInfo::builder()
+        let viewport_state = PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
-            .scissor_count(1)
-            .build();
+            .scissor_count(1);
 
-        let rasterizer = PipelineRasterizationStateCreateInfo::builder()
+        let rasterizer = PipelineRasterizationStateCreateInfo::default()
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
             .polygon_mode(PolygonMode::FILL)
             .line_width(1.)
             .cull_mode(CullModeFlags::BACK)
             .front_face(FrontFace::CLOCKWISE)
-            .depth_bias_enable(false)
-            .build();
+            .depth_bias_enable(false);
 
-        let multisampling = PipelineMultisampleStateCreateInfo::builder()
+        let multisampling = PipelineMultisampleStateCreateInfo::default()
             .sample_shading_enable(false)
-            .rasterization_samples(SampleCountFlags::TYPE_1)
-            .build();
+            .rasterization_samples(SampleCountFlags::TYPE_1);
 
-        let color_blend_attachment = PipelineColorBlendAttachmentState::builder()
+        let color_blend_attachment = PipelineColorBlendAttachmentState::default()
             .color_write_mask(ColorComponentFlags::RGBA)
             .blend_enable(true)
             .src_color_blend_factor(BlendFactor::SRC_ALPHA)
@@ -732,21 +725,20 @@ impl VulkanApplication {
             .color_blend_op(BlendOp::ADD)
             .src_alpha_blend_factor(BlendFactor::ONE)
             .dst_alpha_blend_factor(BlendFactor::ZERO)
-            .alpha_blend_op(BlendOp::ADD)
-            .build();
+            .alpha_blend_op(BlendOp::ADD);
 
-        let color_blending = PipelineColorBlendStateCreateInfo::builder()
+        let color_blend_attachments = [color_blend_attachment];
+        let color_blending = PipelineColorBlendStateCreateInfo::default()
             .logic_op_enable(false)
             .logic_op(LogicOp::COPY)
-            .attachments(&[color_blend_attachment])
-            .build();
+            .attachments(&color_blend_attachments);
 
-        let pipeline_layout_info = PipelineLayoutCreateInfo::builder().build();
+        let pipeline_layout_info = PipelineLayoutCreateInfo::default();
 
         let pipeline_layout =
             unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }.unwrap();
 
-        let pipeline_info = GraphicsPipelineCreateInfo::builder()
+        let pipeline_info = GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)
             .vertex_input_state(&vertex_input_info)
             .input_assembly_state(&input_assembly)
@@ -758,8 +750,7 @@ impl VulkanApplication {
             .dynamic_state(&dynamic_state)
             .layout(pipeline_layout)
             .render_pass(*render_pass)
-            .subpass(0)
-            .build();
+            .subpass(0);
 
         let graphics_pipelines = unsafe {
             device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
@@ -774,16 +765,25 @@ impl VulkanApplication {
         (pipeline_layout, *graphics_pipelines.first().unwrap())
     }
 
-    fn create_graphics_sub_pass() -> vk::SubpassDescription {
+    /*     fn create_graphics_sub_pass() -> vk::SubpassDescription<'static> {
         let color_attachment_refs = [vk::AttachmentReference {
             attachment: 0,
             layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         }];
 
-        let mut subpass = vk::SubpassDescription::default()
+        let subpass = vk::SubpassDescription::default()
             .color_attachments(&color_attachment_refs)
-            .pipeline_bind_point(PipelineBindPoint::GRAPHICS)
-            .resolve_attachments(&[]);
+            .pipeline_bind_point(PipelineBindPoint::GRAPHICS);
+        subpass
+    } */
+
+    fn create_sub_pass(
+        color_attachment_refs: &Vec<vk::AttachmentReference>,
+        pipeline_bind_point: vk::PipelineBindPoint,
+    ) -> vk::SubpassDescription {
+        let subpass = vk::SubpassDescription::default()
+            .color_attachments(&color_attachment_refs)
+            .pipeline_bind_point(PipelineBindPoint::GRAPHICS);
         subpass
     }
 
@@ -800,8 +800,7 @@ impl VulkanApplication {
             .stencil_load_op(AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(AttachmentStoreOp::DONT_CARE)
             .initial_layout(ImageLayout::UNDEFINED)
-            .final_layout(ImageLayout::PRESENT_SRC_KHR)
-            .build();
+            .final_layout(ImageLayout::PRESENT_SRC_KHR);
 
         let dependencies = [vk::SubpassDependency {
             src_subpass: vk::SUBPASS_EXTERNAL,
@@ -814,11 +813,10 @@ impl VulkanApplication {
 
         let color_attachments = [color_attachment];
 
-        let render_pass_info = RenderPassCreateInfo::builder()
+        let render_pass_info = RenderPassCreateInfo::default()
             .attachments(&color_attachments)
             .subpasses(&subpasses)
-            .dependencies(&dependencies)
-            .build();
+            .dependencies(&dependencies);
 
         unsafe { device.create_render_pass(&render_pass_info, None) }
     }
@@ -833,15 +831,12 @@ impl VulkanApplication {
             .iter()
             .map(|swapchain_image_view| {
                 let attachments = [*swapchain_image_view];
-                vk::FramebufferCreateInfo::builder()
+                let framebuffer_info = vk::FramebufferCreateInfo::default()
                     .render_pass(*render_pass)
                     .attachments(&attachments)
                     .width(swapchain_extent.width)
                     .height(swapchain_extent.height)
-                    .layers(1)
-                    .build()
-            })
-            .map(|framebuffer_info| {
+                    .layers(1);
                 unsafe { device.create_framebuffer(&framebuffer_info, None) }
                     .expect("failed to create framebuffer!")
             })
@@ -852,10 +847,9 @@ impl VulkanApplication {
         device: &Device,
         queue_family_indices: &QueueFamilyIndices,
     ) -> vk::CommandPool {
-        let pool_info = vk::CommandPoolCreateInfo::builder()
+        let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(queue_family_indices.graphics_family.unwrap() as u32)
-            .build();
+            .queue_family_index(queue_family_indices.graphics_family.unwrap() as u32);
 
         let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
             .expect("failed to create command pool!");
@@ -866,17 +860,16 @@ impl VulkanApplication {
         device: &Device,
         command_pool: &vk::CommandPool,
     ) -> Result<Vec<vk::CommandBuffer>, vk::Result> {
-        let alloc_info = vk::CommandBufferAllocateInfo::builder()
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(*command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1)
-            .build();
+            .command_buffer_count(1);
 
         unsafe { device.allocate_command_buffers(&alloc_info) }
     }
 
     fn record_command_buffer(&self, image_index: usize) {
-        let begin_info = vk::CommandBufferBeginInfo::builder().build();
+        let begin_info = vk::CommandBufferBeginInfo::default();
 
         unsafe {
             self.device
@@ -890,15 +883,14 @@ impl VulkanApplication {
             },
         }];
 
-        let render_pass_begin = vk::RenderPassBeginInfo::builder()
+        let render_pass_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
             .framebuffer(self.swapchain_framebuffers[image_index])
             .render_area(Rect2D {
                 offset: Offset2D { x: 0, y: 0 },
                 extent: self.extent,
             })
-            .clear_values(&clear_values)
-            .build();
+            .clear_values(&clear_values);
 
         unsafe {
             self.device.cmd_begin_render_pass(
@@ -916,23 +908,21 @@ impl VulkanApplication {
             )
         };
 
-        let viewport = Viewport::builder()
+        let viewport = Viewport::default()
             .x(0.0)
             .y(0.0)
             .width(self.extent.width as f32)
             .height(self.extent.height as f32)
             .min_depth(0.)
-            .max_depth(1.)
-            .build();
+            .max_depth(1.);
         unsafe {
             self.device
                 .cmd_set_viewport(self.command_buffer, 0, &[viewport])
         };
 
-        let scissor = Rect2D::builder()
+        let scissor = Rect2D::default()
             .offset(Offset2D { x: 0, y: 0 })
-            .extent(self.extent)
-            .build();
+            .extent(self.extent);
         unsafe {
             self.device
                 .cmd_set_scissor(self.command_buffer, 0, &[scissor])
@@ -947,7 +937,7 @@ impl VulkanApplication {
     }
 
     fn create_sync_objects(device: &Device) -> (vk::Semaphore, vk::Semaphore, vk::Fence) {
-        let semaphore_create_info = vk::SemaphoreCreateInfo::builder().build();
+        let semaphore_create_info = vk::SemaphoreCreateInfo::default();
         let image_available_semaphore =
             unsafe { device.create_semaphore(&semaphore_create_info, None) }
                 .expect("failed to create semaphore!");
@@ -955,9 +945,8 @@ impl VulkanApplication {
             unsafe { device.create_semaphore(&semaphore_create_info, None) }
                 .expect("failed to create semaphore!");
 
-        let fence_create_info = vk::FenceCreateInfo::builder()
-            .flags(vk::FenceCreateFlags::SIGNALED)
-            .build();
+        let fence_create_info =
+            vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
         let in_flight_fence = unsafe { device.create_fence(&fence_create_info, None) }
             .expect("failed to create fence!");
 
