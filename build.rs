@@ -6,7 +6,7 @@ use std::{
 use shaderc;
 
 fn main() {
-   /*  let compiler = shaderc::Compiler::new().unwrap();
+    let compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();
     options.add_macro_definition("EP", Some("main"));
 
@@ -54,7 +54,7 @@ fn main() {
             let mut new_file = std::fs::File::create(new_path).unwrap();
             new_file.write_all(binary_result.as_binary_u8()).unwrap();
         }
-    } */
+    }
 }
 
 fn get_all_files<P>(dir: P) -> Vec<PathBuf>
