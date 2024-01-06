@@ -17,17 +17,17 @@ use ash::{
         ComponentSwizzle, CompositeAlphaFlagsKHR, CullModeFlags, DeviceCreateInfo,
         DeviceQueueCreateInfo, DynamicState, Extent2D, Format, FrontFace,
         GraphicsPipelineCreateInfo, ImageAspectFlags, ImageLayout, ImageSubresourceRange,
-        ImageUsageFlags, ImageView, ImageViewCreateInfo, ImageViewType, LogicOp, Offset2D,
+        ImageUsageFlags, ImageView, ImageViewCreateInfo, ImageViewType, LogicOp,
         PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceType, Pipeline, PipelineBindPoint,
         PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo,
         PipelineDynamicStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PipelineLayout,
         PipelineLayoutCreateInfo, PipelineMultisampleStateCreateInfo,
         PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateInfo,
         PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo, PolygonMode,
-        PresentModeKHR, PrimitiveTopology, QueueFlags, Rect2D, RenderPassCreateInfo,
+        PresentModeKHR, PrimitiveTopology, QueueFlags, RenderPassCreateInfo,
         SampleCountFlags, ShaderStageFlags, SharingMode, SubpassDescription,
-        SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainCreateInfoKHR, SwapchainKHR,
-        VertexInputBindingDescription, Viewport,
+        SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainCreateInfoKHR,
+        VertexInputBindingDescription,
     },
     Device, Entry, Instance,
 };
@@ -46,28 +46,26 @@ const MAXFRAMESINFLIGHT: usize = 2;
 
 pub struct VulkanApplication {
     window: Window,
-    instance: Instance,
+    instance: ash::Instance,
     debug_utils: ash::extensions::ext::DebugUtils,
     debug_messenger: vk::DebugUtilsMessengerEXT,
-    physical_device: PhysicalDevice,
-    device: Device,
-    surface: SurfaceKHR,
+    physical_device: vk::PhysicalDevice,
+    device: ash::Device,
+    surface: vk::SurfaceKHR,
     surface_loader: Surface,
     graphics_queue: vk::Queue,
     present_queue: vk::Queue,
-    swapchain: SwapchainKHR,
+    swapchain: vk::SwapchainKHR,
     swapchain_loader: Swapchain,
     swapchain_images: Vec<vk::Image>,
-    format: Format,
-    extent: Extent2D,
-    swapchain_image_views: Vec<ImageView>,
+    format: vk::Format,
+    extent: vk::Extent2D,
+    swapchain_image_views: Vec<vk::ImageView>,
     render_pass: vk::RenderPass,
-    pipeline_layout: PipelineLayout,
-    graphics_pipeline: Pipeline,
+    pipeline_layout: vk::PipelineLayout,
+    graphics_pipeline: vk::Pipeline,
     swapchain_framebuffers: Vec<vk::Framebuffer>,
     command_pool: vk::CommandPool,
-    //vertex_buffer: vk::Buffer,
-    //vertex_buffer_memory: vk::DeviceMemory,
     vertex_buffer: VertexBuffer,
     command_buffers: Vec<vk::CommandBuffer>,
     image_available_semaphores: Vec<vk::Semaphore>,
@@ -206,8 +204,6 @@ impl VulkanApplication {
             graphics_pipeline,
             swapchain_framebuffers,
             command_pool,
-            //vertex_buffer,
-            //vertex_buffer_memory,
             vertex_buffer,
             command_buffers,
             image_available_semaphores,
@@ -417,11 +413,7 @@ impl VulkanApplication {
 
         let app_name = unsafe { CStr::from_bytes_with_nul_unchecked(b"Hello Triangle\0") };
         let engine_name = unsafe { CStr::from_bytes_with_nul_unchecked(b"No Engine\0") };
-        /*
-        let mut required_extension_names =
-            ash_window::enumerate_required_extensions(window.raw_display_handle())
-                .unwrap()
-                .to_vec(); */
+
         let mut required_extension_names = vec![];
 
         let mut window_extension_names =
@@ -583,12 +575,6 @@ impl VulkanApplication {
         // Maximum possible size of textures affects graphics quality
         score += properties.limits.max_image_dimension2_d;
 
-        // Application can't function without geometry shaders or the graphics queue family
-        /* if features.geometry_shader == 1 && queue_family_indices.graphics_family.is_some() {
-            Some((score, queue_family_indices, swapchain_details))
-        } else {
-            None
-        } */
         let device_props = unsafe { instance.get_physical_device_properties(*device) };
         let device_name =
             unsafe { CStr::from_ptr(device_props.device_name.as_ptr()).to_str() }.unwrap();
@@ -910,18 +896,6 @@ impl VulkanApplication {
         (pipeline_layout, *graphics_pipelines.first().unwrap())
     }
 
-    /*     fn create_graphics_sub_pass() -> vk::SubpassDescription<'static> {
-        let color_attachment_refs = [vk::AttachmentReference {
-            attachment: 0,
-            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        }];
-
-        let subpass = vk::SubpassDescription::default()
-            .color_attachments(&color_attachment_refs)
-            .pipeline_bind_point(PipelineBindPoint::GRAPHICS);
-        subpass
-    } */
-
     fn create_sub_pass(
         color_attachment_refs: &Vec<vk::AttachmentReference>,
         pipeline_bind_point: vk::PipelineBindPoint,
@@ -1002,7 +976,7 @@ impl VulkanApplication {
     }
 
     fn create_command_buffers(
-        device: &Device,
+        device: &ash::Device,
         command_pool: &vk::CommandPool,
     ) -> Result<Vec<vk::CommandBuffer>, vk::Result> {
         let alloc_info = vk::CommandBufferAllocateInfo::default()
@@ -1031,8 +1005,8 @@ impl VulkanApplication {
         let render_pass_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
             .framebuffer(self.swapchain_framebuffers[image_index])
-            .render_area(Rect2D {
-                offset: Offset2D { x: 0, y: 0 },
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
                 extent: self.extent,
             })
             .clear_values(&clear_values);
@@ -1053,7 +1027,7 @@ impl VulkanApplication {
             )
         };
 
-        let viewport = Viewport::default()
+        let viewport = vk::Viewport::default()
             .x(0.0)
             .y(0.0)
             .width(self.extent.width as f32)
@@ -1062,8 +1036,8 @@ impl VulkanApplication {
             .max_depth(1.);
         unsafe { self.device.cmd_set_viewport(command_buffer, 0, &[viewport]) };
 
-        let scissor = Rect2D::default()
-            .offset(Offset2D { x: 0, y: 0 })
+        let scissor = vk::Rect2D::default()
+            .offset(vk::Offset2D { x: 0, y: 0 })
             .extent(self.extent);
         unsafe { self.device.cmd_set_scissor(command_buffer, 0, &[scissor]) };
 
@@ -1154,22 +1128,12 @@ impl Drop for VulkanApplication {
                 self.device.destroy_fence(self.in_flight_fences[i], None);
             }
             self.device.destroy_command_pool(self.command_pool, None);
-            /*             self.swapchain_framebuffers
-            .iter()
-            .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None)); */
             self.cleanup_swapchain();
-            //self.device.destroy_buffer(self.vertex_buffer, None);
-            //self.device.free_memory(self.vertex_buffer_memory, None);
             self.vertex_buffer.cleanup(&self.device);
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_render_pass(self.render_pass, None);
-            /*             self.swapchain_image_views
-                .iter()
-                .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None); */
             self.device.destroy_device(None);
             #[cfg(feature = "validation_layers")]
             self.debug_utils
@@ -1190,8 +1154,8 @@ impl QueueFamilyIndices {
     fn new(
         queue_families: &Vec<vk::QueueFamilyProperties>,
         surface_loader: &Surface,
-        pdevice: &PhysicalDevice,
-        surface: &SurfaceKHR,
+        pdevice: &vk::PhysicalDevice,
+        surface: &vk::SurfaceKHR,
     ) -> Self {
         let graphics_family_index = if let Some((graphics_family_index, _)) = queue_families
             .iter()
@@ -1225,13 +1189,13 @@ impl QueueFamilyIndices {
 
 #[derive(Clone)]
 struct SwapchainSupportDetails {
-    capabilities: SurfaceCapabilitiesKHR,
-    formats: Vec<SurfaceFormatKHR>,
-    present_modes: Vec<PresentModeKHR>,
+    capabilities: vk::SurfaceCapabilitiesKHR,
+    formats: Vec<vk::SurfaceFormatKHR>,
+    present_modes: Vec<vk::PresentModeKHR>,
 }
 
 impl SwapchainSupportDetails {
-    fn new(device: &PhysicalDevice, surface_loader: &Surface, surface: &SurfaceKHR) -> Self {
+    fn new(device: &vk::PhysicalDevice, surface_loader: &Surface, surface: &vk::SurfaceKHR) -> Self {
         let capabilities =
             unsafe { surface_loader.get_physical_device_surface_capabilities(*device, *surface) }
                 .expect("failed to get surface capabilites!");
@@ -1294,35 +1258,19 @@ macro_rules! offset_of {
 }
 
 pub struct VertexBuffer {
-    //buffer: vk::Buffer,
-    //memory: vk::DeviceMemory,
     buffer: MyBuffer,
     vertices: Vec<Vertex>,
 }
 
 impl VertexBuffer {
     fn init(
-        instance: &Instance,
-        physical_device: &PhysicalDevice,
-        device: &Device,
+        instance: &ash::Instance,
+        physical_device: &vk::PhysicalDevice,
+        device: &ash::Device,
         command_pool: &vk::CommandPool,
         graphics_queue: vk::Queue,
         vertices: Vec<Vertex>,
     ) -> Self {
-        /*  let buffer = Self::create_vertex_buffer(&vertices, &device)
-                    .expect("failed to create vertex buffer!");
-
-                let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-
-                let memory_type_index = Self::find_memory_type(
-                    instance,
-                    physical_device,
-                    mem_requirements.memory_type_bits,
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                );
-                let memory =
-                    Self::allocate_vertex_buffer(&device, buffer, mem_requirements, memory_type_index);
-        */
         let size = (std::mem::size_of::<Vertex>() * vertices.len()) as u64;
 
         let mut staging_buffer = MyBuffer::init(
@@ -1387,9 +1335,9 @@ pub struct MyBuffer {
 
 impl MyBuffer {
     fn init(
-        instance: &Instance,
-        physical_device: &PhysicalDevice,
-        device: &Device,
+        instance: &ash::Instance,
+        physical_device: &vk::PhysicalDevice,
+        device: &ash::Device,
         size: vk::DeviceSize,
         buffer_usage_flags: vk::BufferUsageFlags,
         sharing_mode: vk::SharingMode,
@@ -1422,7 +1370,7 @@ impl MyBuffer {
     }
 
     fn create_buffer(
-        device: &Device,
+        device: &ash::Device,
         size: vk::DeviceSize,
         buffer_usage_flags: vk::BufferUsageFlags,
         sharing_mode: vk::SharingMode,
@@ -1438,7 +1386,7 @@ impl MyBuffer {
     }
 
     fn allocate_buffer(
-        device: &Device,
+        device: &ash::Device,
         mem_requirements: vk::MemoryRequirements,
         memory_type_index: u32,
     ) -> vk::DeviceMemory {
@@ -1453,8 +1401,8 @@ impl MyBuffer {
     }
 
     fn find_memory_type(
-        instance: &Instance,
-        physical_device: &PhysicalDevice,
+        instance: &ash::Instance,
+        physical_device: &vk::PhysicalDevice,
         type_filter: u32,
         properties: vk::MemoryPropertyFlags,
     ) -> u32 {
