@@ -9,6 +9,9 @@ pub struct Vertex {
 }
 
 impl Vertex {
+    pub fn new(pos: glam::Vec2, color: glam::Vec3) -> Self {
+        Self { pos, color }
+    }
     pub fn get_binding_description() -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription::default()
             .binding(0)
@@ -46,9 +49,75 @@ macro_rules! offset_of {
 }
 pub use offset_of;
 
+pub struct IndexBuffer {
+    pub buffer: MyBuffer,
+    pub index_count: usize,
+}
+
+impl IndexBuffer {
+    pub fn new(
+        instance: &ash::Instance,
+        physical_device: &vk::PhysicalDevice,
+        device: &ash::Device,
+        command_pool: &vk::CommandPool,
+        graphics_queue: vk::Queue,
+        indices: Vec<u32>,
+    ) -> Self {
+        let index_count = indices.len();
+        let size = (std::mem::size_of::<u32>() * index_count) as u64;
+
+        let mut staging_buffer = MyBuffer::init(
+            instance,
+            physical_device,
+            device,
+            size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::SharingMode::EXCLUSIVE,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
+        let vert_ptr = unsafe {
+            device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())
+        }
+        .expect("failed to map vertex buffer!");
+        let mut vert_align = unsafe { Align::new(vert_ptr, mem::align_of::<u32>() as u64, size) };
+        vert_align.copy_from_slice(&indices);
+        unsafe { device.unmap_memory(staging_buffer.memory) };
+
+        let index_buffer = MyBuffer::init(
+            instance,
+            physical_device,
+            device,
+            size,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
+            vk::SharingMode::EXCLUSIVE,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+
+        copy_buffer(
+            device,
+            command_pool,
+            graphics_queue,
+            staging_buffer.buffer,
+            index_buffer.buffer,
+            size,
+        );
+
+        staging_buffer.cleanup(device);
+
+        Self {
+            buffer: index_buffer,
+            index_count: indices.len(),
+        }
+    }
+
+    pub fn cleanup(&mut self, device: &ash::Device) {
+        self.buffer.cleanup(device);
+    }
+}
+
 pub struct VertexBuffer {
     pub buffer: MyBuffer,
-    pub vertices: Vec<Vertex>,
+    pub vertex_count: usize,
 }
 
 impl VertexBuffer {
@@ -72,12 +141,7 @@ impl VertexBuffer {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
         let vert_ptr = unsafe {
-            device.map_memory(
-                staging_buffer.memory,
-                0,
-                (std::mem::size_of::<Vertex>() * vertices.len()) as u64,
-                vk::MemoryMapFlags::empty(),
-            )
+            device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())
         }
         .expect("failed to map vertex buffer!");
         let mut vert_align =
@@ -108,7 +172,7 @@ impl VertexBuffer {
 
         Self {
             buffer: vertex_buffer,
-            vertices,
+            vertex_count: vertices.len(),
         }
     }
 

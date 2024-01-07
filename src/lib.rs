@@ -31,7 +31,7 @@ use ash::{
     },
     Device, Entry, Instance,
 };
-use buffers::{Vertex, VertexBuffer};
+use buffers::{IndexBuffer, Vertex, VertexBuffer};
 use glam::{Vec2, Vec3};
 use winit::{
     event::{Event, WindowEvent},
@@ -68,6 +68,7 @@ pub struct VulkanApplication {
     swapchain_framebuffers: Vec<vk::Framebuffer>,
     command_pool: vk::CommandPool,
     vertex_buffer: VertexBuffer,
+    index_buffer: IndexBuffer,
     command_buffers: Vec<vk::CommandBuffer>,
     image_available_semaphores: Vec<vk::Semaphore>,
     render_finished_semaphores: Vec<vk::Semaphore>,
@@ -154,7 +155,7 @@ impl VulkanApplication {
 
         let command_pool = Self::create_command_pool(&logical_device, &queue_family_indices);
 
-        let vertices = vec![
+        /* let vertices = vec![
             Vertex {
                 pos: Vec2::new(0., -0.5),
                 color: Vec3::new(1., 0.5, 0.),
@@ -167,6 +168,13 @@ impl VulkanApplication {
                 pos: Vec2::new(-0.5, 0.5),
                 color: Vec3::new(0.5, 0., 0.5),
             },
+        ]; */
+
+        let vertices = vec![
+            Vertex::new(Vec2::new(-0.5, -0.5), Vec3::new(1., 0., 0.)),
+            Vertex::new(Vec2::new(0.5, -0.5), Vec3::new(0., 1., 0.)),
+            Vertex::new(Vec2::new(0.5, 0.5), Vec3::new(0., 0., 1.)),
+            Vertex::new(Vec2::new(-0.5, 0.5), Vec3::new(1., 1., 1.)),
         ];
 
         let vertex_buffer = VertexBuffer::init(
@@ -176,6 +184,17 @@ impl VulkanApplication {
             &command_pool,
             graphics_queue,
             vertices,
+        );
+
+        let indices = vec![0, 1, 2, 2, 3, 0];
+
+        let index_buffer = IndexBuffer::new(
+            &instance,
+            &physical_device,
+            &logical_device,
+            &command_pool,
+            graphics_queue,
+            indices,
         );
         let command_buffers = Self::create_command_buffers(&logical_device, &command_pool)
             .expect("failed to allocate command buffers!");
@@ -206,6 +225,7 @@ impl VulkanApplication {
             swapchain_framebuffers,
             command_pool,
             vertex_buffer,
+            index_buffer,
             command_buffers,
             image_available_semaphores,
             render_finished_semaphores,
@@ -1049,10 +1069,19 @@ impl VulkanApplication {
                 .cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets)
         }
         unsafe {
-            self.device.cmd_draw(
+            self.device.cmd_bind_index_buffer(
                 command_buffer,
-                self.vertex_buffer.vertices.len() as u32,
+                self.index_buffer.buffer.buffer,
+                0,
+                vk::IndexType::UINT32,
+            )
+        };
+        unsafe {
+            self.device.cmd_draw_indexed(
+                command_buffer,
+                self.index_buffer.index_count as u32,
                 1,
+                0,
                 0,
                 0,
             )
@@ -1130,6 +1159,7 @@ impl Drop for VulkanApplication {
             }
             self.device.destroy_command_pool(self.command_pool, None);
             self.cleanup_swapchain();
+            self.index_buffer.cleanup(&self.device);
             self.vertex_buffer.cleanup(&self.device);
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device
