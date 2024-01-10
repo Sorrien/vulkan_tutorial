@@ -4,6 +4,7 @@ use std::{
     ffi::{c_char, c_void, CStr},
     fs::File,
     path::Path,
+    time::Instant,
 };
 
 use ash::{
@@ -15,8 +16,8 @@ use ash::{
     vk::{
         self, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, BlendFactor, BlendOp,
         ColorComponentFlags, ColorSpaceKHR, CommandPoolCreateFlags, ComponentMapping,
-        ComponentSwizzle, CompositeAlphaFlagsKHR, CullModeFlags, DeviceCreateInfo,
-        DeviceQueueCreateInfo, DynamicState, Extent2D, Format, FrontFace,
+        ComponentSwizzle, CompositeAlphaFlagsKHR, CullModeFlags, DescriptorPoolCreateInfo,
+        DeviceCreateInfo, DeviceQueueCreateInfo, DynamicState, Extent2D, Format, FrontFace,
         GraphicsPipelineCreateInfo, ImageAspectFlags, ImageLayout, ImageSubresourceRange,
         ImageUsageFlags, ImageView, ImageViewCreateInfo, ImageViewType, LogicOp, PhysicalDevice,
         PhysicalDeviceFeatures, PhysicalDeviceType, Pipeline, PipelineBindPoint,
@@ -31,7 +32,7 @@ use ash::{
     },
     Device, Entry, Instance,
 };
-use buffers::{IndexBuffer, Vertex, VertexBuffer};
+use buffers::{IndexBuffer, MyBuffer, UniformBuffer, UniformBufferObject, Vertex, VertexBuffer};
 use glam::{Vec2, Vec3};
 use winit::{
     event::{Event, WindowEvent},
@@ -69,6 +70,7 @@ pub struct VulkanApplication {
     command_pool: vk::CommandPool,
     vertex_buffer: VertexBuffer,
     index_buffer: IndexBuffer,
+    uniform_buffers: Vec<UniformBuffer>,
     command_buffers: Vec<vk::CommandBuffer>,
     image_available_semaphores: Vec<vk::Semaphore>,
     render_finished_semaphores: Vec<vk::Semaphore>,
@@ -77,6 +79,10 @@ pub struct VulkanApplication {
     queue_family_indices: QueueFamilyIndices,
     swapchain_support: SwapchainSupportDetails,
     framebuffer_resized: bool,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_sets: Vec<vk::DescriptorSet>,
+    start_instant: Instant,
 }
 
 impl VulkanApplication {
@@ -103,21 +109,21 @@ impl VulkanApplication {
             Self::pick_physical_device(&instance, &surface_loader, &surface)
                 .expect("failed to find physical device!");
 
-        let logical_device =
+        let device =
             Self::create_logical_device(&instance, &physical_device, &queue_family_indices)
                 .expect("failed to create logical device!");
 
         let graphics_queue = unsafe {
-            logical_device.get_device_queue(queue_family_indices.graphics_family.unwrap() as u32, 0)
+            device.get_device_queue(queue_family_indices.graphics_family.unwrap() as u32, 0)
         };
 
         let present_queue = unsafe {
-            logical_device.get_device_queue(queue_family_indices.present_family.unwrap() as u32, 0)
+            device.get_device_queue(queue_family_indices.present_family.unwrap() as u32, 0)
         };
 
         let (swapchain, swapchain_loader, format, extent) = Self::create_swapchain(
             &instance,
-            &logical_device,
+            &device,
             &surface,
             window_size.width,
             window_size.height,
@@ -130,7 +136,7 @@ impl VulkanApplication {
             .expect("failed to get swapchain images!");
 
         let swapchain_image_views =
-            Self::create_swapchain_image_views(&logical_device, &swapchain_images, format);
+            Self::create_swapchain_image_views(&device, &swapchain_images, format);
 
         let color_attachment_refs = vec![vk::AttachmentReference {
             attachment: 0,
@@ -139,36 +145,32 @@ impl VulkanApplication {
         let graphics_subpass =
             Self::create_sub_pass(&color_attachment_refs, PipelineBindPoint::GRAPHICS);
 
-        let render_pass =
-            Self::create_render_pass(&logical_device, &format, vec![graphics_subpass])
-                .expect("failed to create render pass!");
+        let render_pass = Self::create_render_pass(&device, &format, vec![graphics_subpass])
+            .expect("failed to create render pass!");
+
+        let descriptor_set_layout = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX);
+        let bindings = [descriptor_set_layout];
+
+        let descriptor_set_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+
+        let descriptor_set_layout =
+            unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) }
+                .expect("failed to create descriptor set layout!");
+
+        let descriptor_set_layouts = vec![descriptor_set_layout];
 
         let (pipeline_layout, graphics_pipeline) =
-            Self::create_graphics_pipeline(&logical_device, &render_pass);
+            Self::create_graphics_pipeline(&device, &render_pass, &descriptor_set_layouts);
 
-        let swapchain_framebuffers = Self::create_frame_buffers(
-            &swapchain_image_views,
-            &render_pass,
-            &extent,
-            &logical_device,
-        );
+        let swapchain_framebuffers =
+            Self::create_frame_buffers(&swapchain_image_views, &render_pass, &extent, &device);
 
-        let command_pool = Self::create_command_pool(&logical_device, &queue_family_indices);
-
-        /* let vertices = vec![
-            Vertex {
-                pos: Vec2::new(0., -0.5),
-                color: Vec3::new(1., 0.5, 0.),
-            },
-            Vertex {
-                pos: Vec2::new(0.5, 0.5),
-                color: Vec3::new(0., 1.0, 0.5),
-            },
-            Vertex {
-                pos: Vec2::new(-0.5, 0.5),
-                color: Vec3::new(0.5, 0., 0.5),
-            },
-        ]; */
+        let command_pool = Self::create_command_pool(&device, &queue_family_indices);
 
         let vertices = vec![
             Vertex::new(Vec2::new(-0.5, -0.5), Vec3::new(1., 0., 0.)),
@@ -180,7 +182,7 @@ impl VulkanApplication {
         let vertex_buffer = VertexBuffer::init(
             &instance,
             &physical_device,
-            &logical_device,
+            &device,
             &command_pool,
             graphics_queue,
             vertices,
@@ -191,16 +193,48 @@ impl VulkanApplication {
         let index_buffer = IndexBuffer::new(
             &instance,
             &physical_device,
-            &logical_device,
+            &device,
             &command_pool,
             graphics_queue,
             indices,
         );
-        let command_buffers = Self::create_command_buffers(&logical_device, &command_pool)
+
+        let uniform_buffers = Self::create_uniform_buffers(&instance, &physical_device, &device);
+
+        let descriptor_pool =
+            Self::create_descriptor_pool(&device).expect("failed to create descriptor pool!");
+
+        let descriptor_sets =
+            Self::create_descriptor_sets(&device, descriptor_pool, &descriptor_set_layouts)
+                .expect("failed to allocate descriptor sets!");
+
+        descriptor_sets.iter().zip(&uniform_buffers).for_each(
+            |(descriptor_set, uniform_buffer)| {
+                let buffer_info = vk::DescriptorBufferInfo::default()
+                    .buffer(uniform_buffer.buffer.buffer)
+                    .offset(0)
+                    .range(std::mem::size_of::<UniformBufferObject>() as u64);
+
+                let buffer_infos = [buffer_info];
+                let write_descriptor_set = vk::WriteDescriptorSet::default()
+                    .dst_set(*descriptor_set)
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .buffer_info(&buffer_infos);
+
+                let descriptor_writes = [write_descriptor_set];
+                let descriptor_copies = [];
+                unsafe { device.update_descriptor_sets(&descriptor_writes, &descriptor_copies) };
+            },
+        );
+
+        let command_buffers = Self::create_command_buffers(&device, &command_pool)
             .expect("failed to allocate command buffers!");
 
         let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
-            Self::create_sync_objects(&logical_device);
+            Self::create_sync_objects(&device);
 
         Self {
             window,
@@ -208,7 +242,7 @@ impl VulkanApplication {
             debug_utils,
             debug_messenger,
             physical_device,
-            device: logical_device,
+            device,
             surface,
             surface_loader,
             graphics_queue,
@@ -226,6 +260,7 @@ impl VulkanApplication {
             command_pool,
             vertex_buffer,
             index_buffer,
+            uniform_buffers,
             command_buffers,
             image_available_semaphores,
             render_finished_semaphores,
@@ -234,7 +269,34 @@ impl VulkanApplication {
             queue_family_indices,
             swapchain_support,
             framebuffer_resized: false,
+            descriptor_set_layout,
+            descriptor_pool,
+            descriptor_sets,
+            start_instant: Instant::now(),
         }
+    }
+
+    fn create_descriptor_pool(device: &Device) -> Result<vk::DescriptorPool, vk::Result> {
+        let descriptor_pool_size = vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(MAXFRAMESINFLIGHT as u32);
+        let pool_sizes = [descriptor_pool_size];
+        let descriptor_pool_create_info = DescriptorPoolCreateInfo::default()
+            .pool_sizes(&pool_sizes)
+            .max_sets(MAXFRAMESINFLIGHT as u32);
+        unsafe { device.create_descriptor_pool(&descriptor_pool_create_info, None) }
+    }
+
+    fn create_descriptor_sets(
+        device: &Device,
+        descriptor_pool: vk::DescriptorPool,
+        descriptor_set_layouts: &Vec<vk::DescriptorSetLayout>,
+    ) -> Result<Vec<vk::DescriptorSet>, vk::Result> {
+        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&descriptor_set_layouts);
+
+        unsafe { device.allocate_descriptor_sets(&descriptor_set_allocate_info) }
     }
 
     pub fn run(&mut self, event_loop: EventLoop<()>) -> Result<(), winit::error::EventLoopError> {
@@ -291,6 +353,8 @@ impl VulkanApplication {
             self.recreate_swapchain();
             return;
         }
+
+        self.update_uniform_buffer(self.current_frame);
 
         let (image_index, _was_next_image_acquired) = unsafe {
             let result = self.swapchain_loader.acquire_next_image(
@@ -379,6 +443,30 @@ impl VulkanApplication {
         }
 
         self.current_frame = (self.current_frame + 1) % MAXFRAMESINFLIGHT;
+    }
+
+    fn update_uniform_buffer(&mut self, current_image: usize) {
+        //let time = self.start_instant.elapsed().as_millis();
+        let now = Instant::now();
+        let dur = now - self.start_instant;
+        let time = dur.as_millis();//dur.as_millis() / 100;
+        let uniform_buffer_object = UniformBufferObject {
+            model: glam::Mat4::from_axis_angle(Vec3::Z, time as f32 * 90.),
+            view: glam::Mat4::look_at_rh(
+                glam::Vec3::new(2., 2., 2.),
+                glam::Vec3::new(0., 0., 0.),
+                glam::Vec3::Y,
+            ),
+            proj: glam::Mat4::perspective_rh(
+                45.,
+                self.extent.width as f32 / self.extent.height as f32,
+                0.1,
+                10.,
+            ),
+        };
+
+        let uniform_buffer = &mut self.uniform_buffers[current_image];
+        uniform_buffer.modify_buffer(vec![uniform_buffer_object]);
     }
 
     fn recreate_swapchain(&mut self) {
@@ -819,6 +907,7 @@ impl VulkanApplication {
     fn create_graphics_pipeline(
         device: &Device,
         render_pass: &vk::RenderPass,
+        descriptor_set_layouts: &Vec<vk::DescriptorSetLayout>,
     ) -> (PipelineLayout, Pipeline) {
         let vertex_shader_module =
             Self::create_shader_module("shaders/triangle/triangle.vert.spv", device);
@@ -885,7 +974,8 @@ impl VulkanApplication {
             .logic_op(LogicOp::COPY)
             .attachments(&color_blend_attachments);
 
-        let pipeline_layout_info = PipelineLayoutCreateInfo::default();
+        let pipeline_layout_info =
+            PipelineLayoutCreateInfo::default().set_layouts(descriptor_set_layouts);
 
         let pipeline_layout =
             unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }.unwrap();
@@ -1076,6 +1166,7 @@ impl VulkanApplication {
                 vk::IndexType::UINT32,
             )
         };
+        unsafe { self.device.cmd_bind_descriptor_sets(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.pipeline_layout, 0, &self.descriptor_sets, &[]) };
         unsafe {
             self.device.cmd_draw_indexed(
                 command_buffer,
@@ -1145,6 +1236,16 @@ impl VulkanApplication {
                 .destroy_swapchain(self.swapchain, None);
         }
     }
+
+    fn create_uniform_buffers(
+        instance: &Instance,
+        physical_device: &PhysicalDevice,
+        device: &Device,
+    ) -> Vec<UniformBuffer> {
+        (0..MAXFRAMESINFLIGHT)
+            .map(|_| UniformBuffer::new(instance, physical_device, device, 1))
+            .collect::<Vec<UniformBuffer>>()
+    }
 }
 
 impl Drop for VulkanApplication {
@@ -1159,6 +1260,14 @@ impl Drop for VulkanApplication {
             }
             self.device.destroy_command_pool(self.command_pool, None);
             self.cleanup_swapchain();
+            for i in 0..MAXFRAMESINFLIGHT {
+                let uniform_buffer = &mut self.uniform_buffers[i];
+                uniform_buffer.cleanup(&self.device);
+            }
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             self.index_buffer.cleanup(&self.device);
             self.vertex_buffer.cleanup(&self.device);
             self.device.destroy_pipeline(self.graphics_pipeline, None);

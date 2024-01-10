@@ -187,7 +187,7 @@ pub struct MyBuffer {
 }
 
 impl MyBuffer {
-    fn init(
+    pub fn init(
         instance: &ash::Instance,
         physical_device: &vk::PhysicalDevice,
         device: &ash::Device,
@@ -312,4 +312,64 @@ fn copy_buffer(
         .expect("failed to wait on queue idle after buffer copy submit!");
 
     unsafe { device.free_command_buffers(*command_pool, &command_buffers) };
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct UniformBufferObject {
+    pub model: glam::Mat4,
+    pub view: glam::Mat4,
+    pub proj: glam::Mat4,
+}
+
+pub struct UniformBuffer {
+    pub buffer: MyBuffer,
+    pub mapped_ptr: *mut std::ffi::c_void,
+}
+
+impl UniformBuffer {
+    pub fn new(
+        instance: &ash::Instance,
+        physical_device: &vk::PhysicalDevice,
+        device: &ash::Device,
+        uniform_buffer_object_count: usize,
+    ) -> Self {
+        let size =
+            (std::mem::size_of::<UniformBufferObject>() * uniform_buffer_object_count) as u64;
+
+        let uniform_buffer = MyBuffer::init(
+            instance,
+            physical_device,
+            device,
+            size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::SharingMode::EXCLUSIVE,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
+        let mapped_ptr = unsafe {
+            device.map_memory(uniform_buffer.memory, 0, size, vk::MemoryMapFlags::empty())
+        }
+        .expect("failed to map buffer!");
+
+        Self {
+            buffer: uniform_buffer,
+            mapped_ptr,
+        }
+    }
+
+    pub fn modify_buffer(&mut self, uniform_buffer_objects: Vec<UniformBufferObject>) {
+        let count = uniform_buffer_objects.len();
+        let size = (std::mem::size_of::<UniformBufferObject>() * count) as u64;
+        let mut align = unsafe {
+            Align::new(
+                self.mapped_ptr,
+                mem::align_of::<UniformBufferObject>() as u64,
+                size,
+            )
+        };
+        align.copy_from_slice(&uniform_buffer_objects);
+    }
+
+    pub fn cleanup(&mut self, device: &ash::Device) {
+        self.buffer.cleanup(device);
+    }
 }
