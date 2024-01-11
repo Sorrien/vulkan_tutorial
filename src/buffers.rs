@@ -1,16 +1,24 @@
 use std::mem;
 
-use ash::{util::Align, vk};
+use ash::{
+    util::Align,
+    vk::{self, Extent2D},
+};
 
 #[derive(Clone, Debug, Copy)]
 pub struct Vertex {
     pub pos: glam::Vec2,
     pub color: glam::Vec3,
+    pub tex_coord: glam::Vec2,
 }
 
 impl Vertex {
-    pub fn new(pos: glam::Vec2, color: glam::Vec3) -> Self {
-        Self { pos, color }
+    pub fn new(pos: glam::Vec2, color: glam::Vec3, tex_coord: glam::Vec2) -> Self {
+        Self {
+            pos,
+            color,
+            tex_coord,
+        }
     }
     pub fn get_binding_description() -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription::default()
@@ -32,6 +40,11 @@ impl Vertex {
                 .location(1)
                 .format(vk::Format::R32G32B32_SFLOAT)
                 .offset(offset_of!(Vertex, color) as u32),
+            vk::VertexInputAttributeDescription::default()
+                .binding(0)
+                .location(2)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(offset_of!(Vertex, tex_coord) as u32),
         ]
     }
 }
@@ -140,14 +153,16 @@ impl VertexBuffer {
             vk::SharingMode::EXCLUSIVE,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
-        let vert_ptr = unsafe {
+        /* let vert_ptr = unsafe {
             device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())
         }
         .expect("failed to map vertex buffer!");
         let mut vert_align =
             unsafe { Align::new(vert_ptr, mem::align_of::<Vertex>() as u64, size) };
         vert_align.copy_from_slice(&vertices);
-        unsafe { device.unmap_memory(staging_buffer.memory) };
+        unsafe { device.unmap_memory(staging_buffer.memory) }; */
+
+        copy_to_staging_buffer(device, &staging_buffer, size, &vertices);
 
         let vertex_buffer = MyBuffer::init(
             instance,
@@ -201,7 +216,7 @@ impl MyBuffer {
 
         let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
 
-        let memory_type_index = Self::find_memory_type(
+        let memory_type_index = find_memory_type(
             instance,
             physical_device,
             mem_requirements.memory_type_bits,
@@ -215,7 +230,7 @@ impl MyBuffer {
         Self { buffer, memory }
     }
 
-    fn cleanup(&mut self, device: &ash::Device) {
+    pub fn cleanup(&mut self, device: &ash::Device) {
         unsafe {
             device.destroy_buffer(self.buffer, None);
             device.free_memory(self.memory, None);
@@ -252,25 +267,39 @@ impl MyBuffer {
 
         device_memory
     }
+}
 
-    fn find_memory_type(
-        instance: &ash::Instance,
-        physical_device: &vk::PhysicalDevice,
-        type_filter: u32,
-        properties: vk::MemoryPropertyFlags,
-    ) -> u32 {
-        let mem_properties =
-            unsafe { instance.get_physical_device_memory_properties(*physical_device) };
-        for i in 0..(mem_properties.memory_type_count as usize) {
-            if (type_filter & (1 << i)) != 0
-                && (mem_properties.memory_types[i].property_flags & properties) == properties
-            {
-                return i as u32;
-            }
+pub fn find_memory_type(
+    instance: &ash::Instance,
+    physical_device: &vk::PhysicalDevice,
+    type_filter: u32,
+    properties: vk::MemoryPropertyFlags,
+) -> u32 {
+    let mem_properties =
+        unsafe { instance.get_physical_device_memory_properties(*physical_device) };
+    for i in 0..(mem_properties.memory_type_count as usize) {
+        if (type_filter & (1 << i)) != 0
+            && (mem_properties.memory_types[i].property_flags & properties) == properties
+        {
+            return i as u32;
         }
-
-        panic!("failed to find suitable memory type!");
     }
+
+    panic!("failed to find suitable memory type!");
+}
+
+pub fn copy_to_staging_buffer<DataType: std::marker::Copy>(
+    device: &ash::Device,
+    staging_buffer: &MyBuffer,
+    size: vk::DeviceSize,
+    data: &Vec<DataType>,
+) {
+    let ptr =
+        unsafe { device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty()) }
+            .expect("failed to map buffer!");
+    let mut align = unsafe { Align::new(ptr, mem::align_of::<DataType>() as u64, size) };
+    align.copy_from_slice(&data);
+    unsafe { device.unmap_memory(staging_buffer.memory) };
 }
 
 fn copy_buffer(
@@ -281,6 +310,60 @@ fn copy_buffer(
     dst_buffer: vk::Buffer,
     size: vk::DeviceSize,
 ) {
+    let command_buffer = begin_single_time_commands(device, command_pool);
+
+    let copy_region = vk::BufferCopy::default()
+        .src_offset(0)
+        .dst_offset(0)
+        .size(size);
+    let regions = [copy_region];
+    unsafe { device.cmd_copy_buffer(command_buffer, src_buffer, dst_buffer, &regions) };
+
+    end_single_time_commands(device, command_pool, graphics_queue, command_buffer);
+}
+
+pub fn copy_buffer_to_image(
+    device: &ash::Device,
+    command_pool: &vk::CommandPool,
+    graphics_queue: vk::Queue,
+    buffer: vk::Buffer,
+    image: vk::Image,
+    image_extent: Extent2D,
+) {
+    let command_buffer = begin_single_time_commands(device, command_pool);
+
+    let buffer_image_copy = vk::BufferImageCopy::default()
+        .buffer_offset(0)
+        .buffer_row_length(0)
+        .buffer_image_height(0)
+        .image_subresource(
+            vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .mip_level(0)
+                .base_array_layer(0)
+                .layer_count(1),
+        )
+        .image_offset(vk::Offset3D::default())
+        .image_extent(image_extent.into());
+
+    let regions = [buffer_image_copy];
+    unsafe {
+        device.cmd_copy_buffer_to_image(
+            command_buffer,
+            buffer,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &regions,
+        )
+    }
+
+    end_single_time_commands(device, command_pool, graphics_queue, command_buffer);
+}
+
+pub fn begin_single_time_commands(
+    device: &ash::Device,
+    command_pool: &vk::CommandPool,
+) -> vk::CommandBuffer {
     let allocate_info = vk::CommandBufferAllocateInfo::default()
         .level(vk::CommandBufferLevel::PRIMARY)
         .command_pool(*command_pool)
@@ -294,16 +377,18 @@ fn copy_buffer(
     unsafe { device.begin_command_buffer(command_buffer, &begin_info) }
         .expect("failed to begin copy command buffer!");
 
-    let copy_region = vk::BufferCopy::default()
-        .src_offset(0)
-        .dst_offset(0)
-        .size(size);
-    let regions = [copy_region];
-    unsafe { device.cmd_copy_buffer(command_buffer, src_buffer, dst_buffer, &regions) };
+    command_buffer
+}
 
+pub fn end_single_time_commands(
+    device: &ash::Device,
+    command_pool: &vk::CommandPool,
+    graphics_queue: vk::Queue,
+    command_buffer: vk::CommandBuffer,
+) {
     unsafe { device.end_command_buffer(command_buffer) }
         .expect("failed to end copy command buffer!");
-
+    let command_buffers = [command_buffer];
     let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
     let submits = [submit_info];
     unsafe { device.queue_submit(graphics_queue, &submits, vk::Fence::null()) }
@@ -312,6 +397,82 @@ fn copy_buffer(
         .expect("failed to wait on queue idle after buffer copy submit!");
 
     unsafe { device.free_command_buffers(*command_pool, &command_buffers) };
+}
+
+pub fn copy_buffer_to_image_test(
+    device: &ash::Device,
+    command_pool: &vk::CommandPool,
+    graphics_queue: vk::Queue,
+    buffer: vk::Buffer,
+    image: vk::Image,
+    image_extent: Extent2D,
+) {
+    let command_buffer = begin_single_time_commands(device, command_pool);
+
+    let buffer_image_copy = vk::BufferImageCopy::default()
+        .buffer_offset(0)
+        .buffer_row_length(0)
+        .buffer_image_height(0)
+        .image_subresource(
+            vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .mip_level(0)
+                .base_array_layer(0)
+                .layer_count(1),
+        )
+        .image_offset(vk::Offset3D::default())
+        .image_extent(image_extent.into());
+
+    let regions = [buffer_image_copy];
+    unsafe {
+        device.cmd_copy_buffer_to_image(
+            command_buffer,
+            buffer,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &regions,
+        )
+    }
+
+    let buffer_image_copy = vk::BufferImageCopy::default()
+        .buffer_offset(0)
+        .buffer_row_length(0)
+        .buffer_image_height(0)
+        .image_subresource(
+            vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .mip_level(0)
+                .base_array_layer(0)
+                .layer_count(1),
+        )
+        .image_offset(vk::Offset3D::default())
+        .image_extent(image_extent.into());
+
+    let regions = [buffer_image_copy];
+    unsafe {
+        device.cmd_copy_buffer_to_image(
+            command_buffer,
+            buffer,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &regions,
+        )
+    }
+
+    end_single_time_commands(device, command_pool, graphics_queue, command_buffer);
+}
+
+pub fn submit_single_time_commands<F: FnOnce(&ash::Device)>(
+    device: &ash::Device,
+    command_pool: &vk::CommandPool,
+    graphics_queue: vk::Queue,
+    f: F,
+) {
+    let command_buffer = begin_single_time_commands(device, command_pool);
+
+    f(device);
+
+    end_single_time_commands(device, command_pool, graphics_queue, command_buffer);
 }
 
 #[derive(Clone, Debug, Copy)]
