@@ -7,13 +7,13 @@ use ash::{
 
 #[derive(Clone, Debug, Copy)]
 pub struct Vertex {
-    pub pos: glam::Vec2,
+    pub pos: glam::Vec3,
     pub color: glam::Vec3,
     pub tex_coord: glam::Vec2,
 }
 
 impl Vertex {
-    pub fn new(pos: glam::Vec2, color: glam::Vec3, tex_coord: glam::Vec2) -> Self {
+    pub fn new(pos: glam::Vec3, color: glam::Vec3, tex_coord: glam::Vec2) -> Self {
         Self {
             pos,
             color,
@@ -33,7 +33,7 @@ impl Vertex {
             vk::VertexInputAttributeDescription::default()
                 .binding(0)
                 .location(0)
-                .format(vk::Format::R32G32_SFLOAT)
+                .format(vk::Format::R32G32B32_SFLOAT)
                 .offset(offset_of!(Vertex, pos) as u32),
             vk::VertexInputAttributeDescription::default()
                 .binding(0)
