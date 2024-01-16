@@ -11,19 +11,18 @@ use ash::{
     },
     util::read_spv,
     vk::{
-        self, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, BlendFactor, BlendOp,
-        ColorComponentFlags, ColorSpaceKHR, CompositeAlphaFlagsKHR, CullModeFlags,
-        DescriptorPoolCreateInfo, DeviceCreateInfo, DeviceQueueCreateInfo, DynamicState, Extent2D,
-        Format, FrontFace, GraphicsPipelineCreateInfo, ImageLayout, ImageUsageFlags, ImageView,
-        LogicOp, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceType,
-        PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo,
+        self, AttachmentLoadOp, AttachmentStoreOp, BlendFactor, BlendOp, ColorComponentFlags,
+        ColorSpaceKHR, CompositeAlphaFlagsKHR, CullModeFlags, DescriptorPoolCreateInfo,
+        DeviceCreateInfo, DeviceQueueCreateInfo, DynamicState, Extent2D, Format, FrontFace,
+        ImageLayout, ImageUsageFlags, ImageView, LogicOp, PhysicalDevice, PhysicalDeviceFeatures,
+        PhysicalDeviceType, PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo,
         PipelineDynamicStateCreateInfo, PipelineInputAssemblyStateCreateInfo,
         PipelineLayoutCreateInfo, PipelineMultisampleStateCreateInfo,
         PipelineRasterizationStateCreateInfo, PipelineShaderStageCreateInfo,
         PipelineVertexInputStateCreateInfo, PipelineViewportStateCreateInfo, PolygonMode,
         PresentModeKHR, PrimitiveTopology, RenderPassCreateInfo, SampleCountFlags,
-        ShaderStageFlags, SharingMode, SubpassDescription, SurfaceCapabilitiesKHR,
-        SurfaceFormatKHR, SurfaceKHR, SwapchainCreateInfoKHR,
+        ShaderStageFlags, SharingMode, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR,
+        SwapchainCreateInfoKHR,
     },
     Entry, Instance,
 };
@@ -570,10 +569,10 @@ impl BaseVulkanState {
         let rasterizer = PipelineRasterizationStateCreateInfo::default()
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
-            .polygon_mode(PolygonMode::FILL)
+            .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.)
-            .cull_mode(CullModeFlags::BACK)
-            .front_face(FrontFace::CLOCKWISE)
+            .cull_mode(vk::CullModeFlags::BACK)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(false);
 
         let multisampling = PipelineMultisampleStateCreateInfo::default()

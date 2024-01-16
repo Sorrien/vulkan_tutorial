@@ -13,6 +13,7 @@ ash = { git = "https://github.com/ash-rs/ash.git", features = ["linked"] }
 ash-window = { git = "https://github.com/ash-rs/ash.git" }
 chrono = "0.4"
 image = "0.24"
+obj = "0.10"
 
 [features]
 validation_layers = []

@@ -1,5 +1,3 @@
-pub mod buffers;
-
 use std::time::Instant;
 
 use ash::{
@@ -7,8 +5,8 @@ use ash::{
     vk::{self, Extent2D, ImageView, PipelineBindPoint},
     Device,
 };
-use buffers::{IndexBuffer, UniformBuffer, UniformBufferObject, Vertex, VertexBuffer};
-use glam::{Vec2, Vec3};
+use buffers::{IndexBuffer, UniformBuffer, UniformBufferObject, VertexBuffer};
+use glam::Vec3;
 use vulkan_base::{BaseVulkanState, SwapchainSupportDetails};
 use winit::{
     event::{Event, WindowEvent},
@@ -16,7 +14,9 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
+pub mod buffers;
 pub mod debug;
+pub mod models;
 pub mod vulkan_base;
 
 const MAXFRAMESINFLIGHT: usize = 2;
@@ -108,7 +108,7 @@ impl VulkanApplication {
         let command_pool = base_vulkan_state.create_command_pool();
 
         let (texture_image, texture_image_memory) =
-            base_vulkan_state.create_texture_image(&command_pool, "textures/textures.jpg");
+            base_vulkan_state.create_texture_image(&command_pool, "textures/viking_room.png");
 
         let physical_device_properties = unsafe {
             base_vulkan_state
@@ -121,49 +121,7 @@ impl VulkanApplication {
         let texture_sampler = base_vulkan_state
             .create_texture_sampler(physical_device_properties.limits.max_sampler_anisotropy);
 
-        let vertices = vec![
-            Vertex::new(
-                Vec3::new(-0.5, -0.5, 0.),
-                Vec3::new(1., 0., 0.),
-                Vec2::new(1., 0.),
-            ),
-            Vertex::new(
-                Vec3::new(0.5, -0.5, 0.),
-                Vec3::new(0., 1., 0.),
-                Vec2::new(0., 0.),
-            ),
-            Vertex::new(
-                Vec3::new(0.5, 0.5, 0.),
-                Vec3::new(0., 0., 1.),
-                Vec2::new(0., 1.),
-            ),
-            Vertex::new(
-                Vec3::new(-0.5, 0.5, 0.),
-                Vec3::new(1., 1., 1.),
-                Vec2::new(1., 1.),
-            ),
-            //
-            Vertex::new(
-                Vec3::new(-0.5, -0.5, -0.5),
-                Vec3::new(1., 0., 0.),
-                Vec2::new(1., 0.),
-            ),
-            Vertex::new(
-                Vec3::new(0.5, -0.5, -0.5),
-                Vec3::new(0., 1., 0.),
-                Vec2::new(0., 0.),
-            ),
-            Vertex::new(
-                Vec3::new(0.5, 0.5, -0.5),
-                Vec3::new(0., 0., 1.),
-                Vec2::new(0., 1.),
-            ),
-            Vertex::new(
-                Vec3::new(-0.5, 0.5, -0.5),
-                Vec3::new(1., 1., 1.),
-                Vec2::new(1., 1.),
-            ),
-        ];
+        let (vertices, indices) = models::load_model("models/viking_room.obj");
 
         let vertex_buffer = VertexBuffer::init(
             &base_vulkan_state.instance,
@@ -173,11 +131,6 @@ impl VulkanApplication {
             base_vulkan_state.graphics_queue,
             vertices,
         );
-
-        let indices = vec![
-            0, 1, 2, 2, 3, 0, //
-            4, 5, 6, 6, 7, 4,
-        ];
 
         let index_buffer = IndexBuffer::new(
             &base_vulkan_state.instance,
@@ -433,20 +386,21 @@ impl VulkanApplication {
         let dur = now - self.start_instant;
         let time = dur.as_millis();
         let model_angle = (time as f32 / 100000.) * 90.;
-        let uniform_buffer_object = UniformBufferObject {
-            model: glam::Mat4::from_axis_angle(Vec3::Z, model_angle),
+        let mut uniform_buffer_object = UniformBufferObject {
+            model: glam::Mat4::IDENTITY * glam::Mat4::from_axis_angle(glam::Vec3::Z, model_angle),
             view: glam::Mat4::look_at_rh(
                 glam::Vec3::new(2., 2., 2.),
                 glam::Vec3::new(0., 0., 0.),
-                glam::Vec3::Y,
+                glam::Vec3::Z,
             ),
-            proj: glam::Mat4::perspective_rh(
+            proj: glam::Mat4::perspective_rh_gl(
                 45.,
                 self.extent.width as f32 / self.extent.height as f32,
                 0.1,
                 10.,
             ),
         };
+        uniform_buffer_object.proj.y_axis *= -1.;
 
         let uniform_buffer = &mut self.uniform_buffers[current_image];
         uniform_buffer.modify_buffer(vec![uniform_buffer_object]);
