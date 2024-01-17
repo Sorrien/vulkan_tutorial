@@ -50,6 +50,7 @@ pub struct BaseVulkanState {
     pub swapchain_support: SwapchainSupportDetails,
     pub debug_messenger: vk::DebugUtilsMessengerEXT,
     pub debug_utils: DebugUtils,
+    msaa_samples: SampleCountFlags,
 }
 
 impl BaseVulkanState {
@@ -71,7 +72,7 @@ impl BaseVulkanState {
         }
         .expect("failed to create window surface!");
 
-        let (physical_device, queue_family_indices, swapchain_support) =
+        let (physical_device, queue_family_indices, swapchain_support, msaa_samples) =
             Self::pick_physical_device(&instance, &surface_loader, &surface)
                 .expect("failed to find physical device!");
 
@@ -100,6 +101,7 @@ impl BaseVulkanState {
             surface_loader,
             debug_utils,
             debug_messenger,
+            msaa_samples,
         }
     }
 
@@ -210,10 +212,15 @@ impl BaseVulkanState {
     }
 
     fn pick_physical_device(
-        instance: &Instance,
+        instance: &ash::Instance,
         surface_loader: &Surface,
-        surface: &SurfaceKHR,
-    ) -> Option<(PhysicalDevice, QueueFamilyIndices, SwapchainSupportDetails)> {
+        surface: &vk::SurfaceKHR,
+    ) -> Option<(
+        vk::PhysicalDevice,
+        QueueFamilyIndices,
+        SwapchainSupportDetails,
+        vk::SampleCountFlags,
+    )> {
         let physical_devices = unsafe { instance.enumerate_physical_devices() }
             .expect("failed to find physical devices!");
 
@@ -224,20 +231,33 @@ impl BaseVulkanState {
         let mut scored_devices = physical_devices
             .iter()
             .filter_map(|device| {
-                if let Some((score, queue_family_indices, swapchain_details)) =
+                if let Some((score, queue_family_indices, swapchain_details, msaa_samples)) =
                     Self::rate_device(instance, device, surface_loader, surface)
                 {
-                    Some((score, device, queue_family_indices, swapchain_details))
+                    Some((
+                        score,
+                        device,
+                        queue_family_indices,
+                        swapchain_details,
+                        msaa_samples,
+                    ))
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
 
-        scored_devices.sort_by(|(a, _, _, _), (b, _, _, _)| a.cmp(b));
+        scored_devices.sort_by(|(a, _, _, _, _), (b, _, _, _, _)| a.cmp(b));
 
-        if let Some((_, device, queue_family_indices, swapchain_details)) = scored_devices.last() {
-            Some((**device, *queue_family_indices, swapchain_details.clone()))
+        if let Some((_, device, queue_family_indices, swapchain_details, msaa_samples)) =
+            scored_devices.last()
+        {
+            Some((
+                **device,
+                *queue_family_indices,
+                swapchain_details.clone(),
+                *msaa_samples,
+            ))
         } else {
             None
         }
@@ -248,7 +268,12 @@ impl BaseVulkanState {
         device: &PhysicalDevice,
         surface_loader: &Surface,
         surface: &SurfaceKHR,
-    ) -> Option<(u32, QueueFamilyIndices, SwapchainSupportDetails)> {
+    ) -> Option<(
+        u32,
+        QueueFamilyIndices,
+        SwapchainSupportDetails,
+        vk::SampleCountFlags,
+    )> {
         let mut score = 0;
 
         let features = unsafe { instance.get_physical_device_features(*device) };
@@ -278,7 +303,8 @@ impl BaseVulkanState {
 
                 if swapchain_details.formats.len() > 0 && swapchain_details.present_modes.len() > 0
                 {
-                    Some((score, queue_family_indices, swapchain_details))
+                    let msaa_samples = Self::get_max_usable_sample_count(device_props);
+                    Some((score, queue_family_indices, swapchain_details, msaa_samples))
                 } else {
                     println!(
                         "failed to find swapchain format or present mode on physical device! {}",
@@ -295,6 +321,36 @@ impl BaseVulkanState {
             }
         } else {
             None
+        }
+    }
+
+    pub fn get_max_usable_sample_count(
+        physical_device_properties: vk::PhysicalDeviceProperties,
+    ) -> vk::SampleCountFlags {
+        let counts = physical_device_properties
+            .limits
+            .framebuffer_color_sample_counts
+            & physical_device_properties
+                .limits
+                .framebuffer_depth_sample_counts;
+
+        let sorted_desired_sample_counts = [
+            vk::SampleCountFlags::TYPE_64,
+            vk::SampleCountFlags::TYPE_32,
+            vk::SampleCountFlags::TYPE_16,
+            vk::SampleCountFlags::TYPE_8,
+            vk::SampleCountFlags::TYPE_4,
+            vk::SampleCountFlags::TYPE_2,
+        ];
+
+        let mut allowed_sample_counts = sorted_desired_sample_counts
+            .iter()
+            .filter(|desired_sample_count| counts.contains(**desired_sample_count));
+
+        if let Some(sample_count) = allowed_sample_counts.next() {
+            *sample_count
+        } else {
+            vk::SampleCountFlags::TYPE_1
         }
     }
 
@@ -462,23 +518,33 @@ impl BaseVulkanState {
     ) -> Result<vk::RenderPass, vk::Result> {
         let color_attachment = vk::AttachmentDescription::default()
             .format(swapchain_format)
-            .samples(SampleCountFlags::TYPE_1)
+            .samples(self.msaa_samples)
             .load_op(AttachmentLoadOp::CLEAR)
             .store_op(AttachmentStoreOp::STORE)
             .stencil_load_op(AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(AttachmentStoreOp::DONT_CARE)
             .initial_layout(ImageLayout::UNDEFINED)
-            .final_layout(ImageLayout::PRESENT_SRC_KHR);
+            .final_layout(ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
         let depth_attachment = vk::AttachmentDescription::default()
             .format(self.find_depth_format())
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(self.msaa_samples)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::DONT_CARE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+        let color_attachment_resolve = vk::AttachmentDescription::default()
+            .format(swapchain_format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 
         let dependencies = [vk::SubpassDependency {
             src_subpass: vk::SUBPASS_EXTERNAL,
@@ -492,7 +558,7 @@ impl BaseVulkanState {
             ..Default::default()
         }];
 
-        let attachments = [color_attachment, depth_attachment];
+        let attachments = [color_attachment, depth_attachment, color_attachment_resolve];
 
         let render_pass_info = RenderPassCreateInfo::default()
             .attachments(&attachments)
@@ -580,8 +646,8 @@ impl BaseVulkanState {
             .depth_bias_enable(false);
 
         let multisampling = PipelineMultisampleStateCreateInfo::default()
-            .sample_shading_enable(false)
-            .rasterization_samples(SampleCountFlags::TYPE_1);
+            .sample_shading_enable(true)
+            .rasterization_samples(self.msaa_samples);
 
         let color_blend_attachment = PipelineColorBlendAttachmentState::default()
             .color_write_mask(ColorComponentFlags::RGBA)
@@ -765,6 +831,7 @@ impl BaseVulkanState {
                 | vk::ImageUsageFlags::SAMPLED,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
             mip_levels,
+            vk::SampleCountFlags::TYPE_1,
         );
 
         self.transition_image_layout(
@@ -913,6 +980,7 @@ impl BaseVulkanState {
         usage: vk::ImageUsageFlags,
         properties: vk::MemoryPropertyFlags,
         mip_levels: u32,
+        num_samples: vk::SampleCountFlags,
     ) -> (vk::Image, vk::DeviceMemory) {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
@@ -924,7 +992,7 @@ impl BaseVulkanState {
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(vk::SampleCountFlags::TYPE_1);
+            .samples(num_samples);
 
         let image = unsafe { self.device.create_image(&image_info, None) }
             .expect("failed to create image!");
@@ -1191,6 +1259,7 @@ impl BaseVulkanState {
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
             mip_levels,
+            self.msaa_samples,
         );
         let depth_image_view = self.create_image_view(
             depth_image,
@@ -1245,6 +1314,25 @@ impl BaseVulkanState {
 
     pub fn has_stencil_component(format: vk::Format) -> bool {
         format == vk::Format::D32_SFLOAT_S8_UINT || format == vk::Format::D24_UNORM_S8_UINT
+    }
+
+    pub fn create_color_resources(
+        &self,
+        format: vk::Format,
+        extent: Extent2D,
+    ) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
+        let (image, image_memory) = self.create_image(
+            extent,
+            format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            1,
+            self.msaa_samples,
+        );
+        let image_view = self.create_image_view(image, format, vk::ImageAspectFlags::COLOR, 1);
+
+        (image, image_memory, image_view)
     }
 }
 

@@ -54,6 +54,9 @@ pub struct VulkanApplication {
     depth_image: vk::Image,
     depth_image_memory: vk::DeviceMemory,
     depth_image_view: ImageView,
+    color_image: vk::Image,
+    color_image_memory: vk::DeviceMemory,
+    color_image_view: vk::ImageView,
 }
 
 impl VulkanApplication {
@@ -79,9 +82,15 @@ impl VulkanApplication {
             .attachment(1)
             .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
+        let resolve_attachment_refs = vec![vk::AttachmentReference {
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            attachment: 2,
+        }];
+
         let graphics_subpass = Self::create_sub_pass(
             &color_attachment_refs,
             &depth_attachment_ref,
+            &resolve_attachment_refs,
             PipelineBindPoint::GRAPHICS,
         );
 
@@ -94,6 +103,9 @@ impl VulkanApplication {
         let (pipeline_layout, graphics_pipeline) =
             base_vulkan_state.create_graphics_pipeline(&render_pass, &descriptor_set_layouts);
 
+        let (color_image, color_image_memory, color_image_view) =
+            base_vulkan_state.create_color_resources(format, extent);
+
         let (depth_image, depth_image_memory, depth_image_view) =
             base_vulkan_state.create_depth_resources(extent);
 
@@ -103,6 +115,7 @@ impl VulkanApplication {
             &extent,
             &base_vulkan_state.device,
             depth_image_view,
+            color_image_view,
         );
 
         let command_pool = base_vulkan_state.create_command_pool();
@@ -116,8 +129,10 @@ impl VulkanApplication {
                 .get_physical_device_properties(base_vulkan_state.physical_device)
         };
 
-        let texture_sampler = base_vulkan_state
-            .create_texture_sampler(physical_device_properties.limits.max_sampler_anisotropy, texture_mip_levels);
+        let texture_sampler = base_vulkan_state.create_texture_sampler(
+            physical_device_properties.limits.max_sampler_anisotropy,
+            texture_mip_levels,
+        );
 
         let (vertices, indices) = models::load_model("models/viking_room.obj");
 
@@ -229,6 +244,9 @@ impl VulkanApplication {
             depth_image,
             depth_image_memory,
             depth_image_view,
+            color_image,
+            color_image_memory,
+            color_image_view,
         }
     }
 
@@ -435,10 +453,17 @@ impl VulkanApplication {
 
         self.swapchain_image_views = self
             .base_vulkan_state
-            .create_swapchain_image_views(&self.swapchain_images, format);
+            .create_swapchain_image_views(&self.swapchain_images, self.format);
+
+        let (color_image, color_image_memory, color_image_view) = self
+            .base_vulkan_state
+            .create_color_resources(self.format, self.extent);
+        self.color_image = color_image;
+        self.color_image_memory = color_image_memory;
+        self.color_image_view = color_image_view;
 
         let (depth_image, depth_image_memory, depth_image_view) =
-            self.base_vulkan_state.create_depth_resources(extent);
+            self.base_vulkan_state.create_depth_resources(self.extent);
 
         self.depth_image = depth_image;
         self.depth_image_memory = depth_image_memory;
@@ -450,6 +475,7 @@ impl VulkanApplication {
             &self.extent,
             &self.base_vulkan_state.device,
             self.depth_image_view,
+            self.color_image_view,
         );
     }
 
@@ -467,12 +493,14 @@ impl VulkanApplication {
     fn create_sub_pass<'a>(
         color_attachment_refs: &'a Vec<vk::AttachmentReference>,
         depth_stencil_attachment: &'a vk::AttachmentReference,
+        resolve_attachments: &'a Vec<vk::AttachmentReference>,
         pipeline_bind_point: vk::PipelineBindPoint,
     ) -> vk::SubpassDescription<'a> {
         let subpass = vk::SubpassDescription::default()
             .color_attachments(color_attachment_refs)
             .depth_stencil_attachment(depth_stencil_attachment)
-            .pipeline_bind_point(pipeline_bind_point);
+            .pipeline_bind_point(pipeline_bind_point)
+            .resolve_attachments(resolve_attachments);
         subpass
     }
 
@@ -482,11 +510,12 @@ impl VulkanApplication {
         swapchain_extent: &Extent2D,
         device: &Device,
         depth_image_view: vk::ImageView,
+        color_image_view: vk::ImageView,
     ) -> Vec<vk::Framebuffer> {
         swapchain_image_views
             .iter()
             .map(|swapchain_image_view| {
-                let attachments = [*swapchain_image_view, depth_image_view];
+                let attachments = [color_image_view, depth_image_view, *swapchain_image_view];
                 let framebuffer_info = vk::FramebufferCreateInfo::default()
                     .render_pass(*render_pass)
                     .attachments(&attachments)
@@ -663,6 +692,15 @@ impl VulkanApplication {
 
     fn cleanup_swapchain(&mut self) {
         unsafe {
+            self.base_vulkan_state
+                .device
+                .destroy_image_view(self.color_image_view, None);
+            self.base_vulkan_state
+                .device
+                .destroy_image(self.color_image, None);
+            self.base_vulkan_state
+                .device
+                .free_memory(self.color_image_memory, None);
             self.base_vulkan_state
                 .device
                 .destroy_image_view(self.depth_image_view, None);
