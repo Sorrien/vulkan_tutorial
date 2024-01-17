@@ -107,7 +107,7 @@ impl VulkanApplication {
 
         let command_pool = base_vulkan_state.create_command_pool();
 
-        let (texture_image, texture_image_memory) =
+        let (texture_image, texture_image_memory, texture_image_view, texture_mip_levels) =
             base_vulkan_state.create_texture_image(&command_pool, "textures/viking_room.png");
 
         let physical_device_properties = unsafe {
@@ -116,10 +116,8 @@ impl VulkanApplication {
                 .get_physical_device_properties(base_vulkan_state.physical_device)
         };
 
-        let texture_image_view = base_vulkan_state.create_texture_image_view(texture_image);
-
         let texture_sampler = base_vulkan_state
-            .create_texture_sampler(physical_device_properties.limits.max_sampler_anisotropy);
+            .create_texture_sampler(physical_device_properties.limits.max_sampler_anisotropy, texture_mip_levels);
 
         let (vertices, indices) = models::load_model("models/viking_room.obj");
 
