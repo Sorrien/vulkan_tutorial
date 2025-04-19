@@ -367,7 +367,8 @@ impl BaseVulkanState {
 
         let device_features = PhysicalDeviceFeatures::default()
             .geometry_shader(true)
-            .sampler_anisotropy(true);
+            .sampler_anisotropy(true)
+            .sample_rate_shading(true);
 
         //may want to add check against available extensions later but the availability of present implies swap chain extension availability.
         let device_extension_names_raw = [
